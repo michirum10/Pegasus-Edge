@@ -6,8 +6,8 @@
 
 ## Current Snapshot
 
-- Updated: 2026-06-13 00:30 JST
-- Current focus: Codexレビュー指摘4件（High: actorリーク / Medium: ロガー発走跨ぎ・診断フラグ / Low: キャッシュ頑健性）の修正が完了し、**リーク修正後のv2/v3再判定でもIG≈0・全年0賭けの結論は不変**（最大フォールドのIGは約0.0004 nat低下＝リーク寄与分が消失、結論の信頼性が確定）。次の主攻は (1) レシピ群C＝複勝EV検証、(2) SPEC-1/SPEC-2クロール完了→拡張テーブル化、(3) SPEC-3時系列オッズ蓄積。
+- Updated: 2026-06-13 00:51 JST
+- Current focus: **複勝プール監査で初の経済的に意味のある歪みを発見**: 単勝[1.0,2.0)帯の複勝ROI 0.8963（CI [0.881,0.911]・年別安定・tension +0.104）。損益分岐への条件付きリフト要求は約+11.6%でwin poolの半分以下。次の主攻は (1) C4実装＝P(top3)モデル×実払戻EVの[1,3)帯walk-forward、(2) SPEC-1/SPEC-2クロール完了→拡張テーブル化（root CSVの2024年欠落約1,100レースもrace_dbから補完）、(3) SPEC-3時系列オッズ蓄積。
 - 確定事項: `_payout_cache.jsonl` スキーマ監査完了（8券種・14,054レース・2022-2026のみ・2024年に約1,100レース欠落、レシピ群C実装ゲート通過）。P0ゾーン単独戦略は失敗（非有界オッズゾーンのEVアーティファクトと診断）。pytest 36件（リーク回帰5件含む）全通過。
 - Active processes: SPEC-1（race_db）/ SPEC-2（odds_final）クロール2本 ＋ **本日2026-06-13開催分のオッズロガーデーモン**（00:16起動、初回T-60=08:45、3場36R）。
 - Latest confirmed root CSV range: `2015-01-04` から `2026-05-24`
@@ -26,6 +26,27 @@
 - 詳細な数値や長い表は `results/` に置き、このログには要点と次アクションだけを書く。
 
 ## Log
+
+### 2026-06-13 00:51 JST
+
+- Actor: Claude
+- Category: Market Audit / Analysis
+- Action: レシピ群Cの前段として複勝プール歪み監査を実装・実行（`py -m src.analysis.place_pool_audit`）。payout cache の fukusho 実払戻を的中判定に使い、全馬複勝フラット買いの素ROIを帯別×年別に実測、同一レース集合の単勝ROIとの較差（tension）を地図化。
+- Findings: **単勝オッズ[1.0,2.0)帯の複勝ROIは0.8963（95%CI [0.881, 0.911]、n=3,286、的中率81.1%・平均払戻110円）で、全帯・全券種を通じ初めて経済的に意味のある歪み**。年別も0.87→0.93と安定上昇（2026年0.929）。tension（複勝−単勝）は+0.104で、強い本命は「単勝で買うより複勝で買うべき」構造。一方[100,∞)帯は0.532で複勝も大穴過剰賭け。全体は0.7269と控除の壁どおり。損益分岐に必要な条件付きリフトは約+11.6%（win poolの+25%の半分以下）に縮小。2024年欠落の訂正: 穴はcacheでなく`race_results.csv`側（2,313レースのみ、race_db/2024.jsonl=3,442レースで補完可能）。
+- Files touched: `src/analysis/place_pool_audit.py`, `results/20260613_place_pool_audit.md`, `results/20260612_payout_cache_audit.md`（2024年欠落の訂正）
+- Report: `results/20260613_place_pool_audit.md`
+- Status: Done
+- Next: C4実装 = P(top3)モデル（ラベルは2015年から利用可、v3特徴量流用）× cache実払戻のEV評価を[1,3)帯に絞ってwalk-forward検証。SPEC-2の複勝レンジが揃えば購入時点オッズでの検証に格上げ。
+
+### 2026-06-13 00:37 JST
+
+- Actor: Codex
+- Category: Code Review / Verification
+- Action: Claude による Codexレビュー指摘修正（actor履歴リーク、SPEC-3発走跨ぎ、診断フラグ、race_db頑健性）を再確認。
+- Findings: `_daily_actor_stats` は actor×日付 many-to-one で前日までの累積に修正済み。実データ 522,548行で trainer/jockey とも actor×日付内の履歴値ブレ0件、期待累積との不一致0件。SPEC-3ロガーは取得前・リトライ中・保存直前の3点で発走時刻跨ぎを破棄する実装になっている。`--no-early-stop` / `--no-ig-gate` も復元済み。
+- Verification: `py -m pytest tests -q` は36 passed、`py -m py_compile src/data/extra_features.py scraper/odds_timeseries_logger.py src/models/train_value_lgbm.py` 合格、`py -m src.models.train_value_lgbm --smoke --features v3` 完走（2017 fold、0賭け）。
+- Status: Done
+- Next: レシピ群C（複勝EV）と、SPEC-1/SPEC-2完了後のJSONL正規化・拡張テーブル化を進める。
 
 ### 2026-06-13 00:30 JST
 
