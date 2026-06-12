@@ -1,13 +1,13 @@
 """現存データのみで作る追加特徴量 (IG>0 達成のための特徴量強化 v2)。
 
-- 騎手・調教師の expanding 成績: 当該レースより前の行のみを集計
-  (cumsum から自レース分を引く方式。dataloader の馬履歴と同じ規約)
+- 騎手・調教師の expanding 成績: **厳密に前日までの日次集計**のみを使う。
+  行単位の cumsum - current 方式は、同一レースに同じ調教師の馬が複数頭
+  いる場合に同一レース内の結果が後続行へ混入し、同日他レースの結果も
+  混入するため使用しない (Codexレビュー 2026-06-13 High指摘で修正)。
+  日次セマンティクスは src/features/trailing_stats.py と同一。
 - processed_races.csv からの racecourse / track_condition 結合
   (track_condition は数値コードのまま category として扱う。
    コード対応表は未検証だが、カテゴリ特徴量として使う分には対応不要)
-
-リーク注意: 呼び出し側のフレームは (race_date, race_id, horse_no) で
-ソート済みであること。expanding 集計はその行順を前提とする。
 """
 
 from __future__ import annotations
@@ -29,29 +29,36 @@ ACTOR_FEATURE_COLUMNS = (
 RACE_CONTEXT_COLUMNS = ("racecourse", "track_condition")
 
 
-def _expanding_actor_stats(df: pd.DataFrame, actor_col: str, prefix: str) -> pd.DataFrame:
-    if not df["race_date"].is_monotonic_increasing:
-        raise ValueError("frame must be sorted by race_date before expanding stats")
-    grouped = df.groupby(actor_col, sort=False, observed=True)
-    starts = grouped.cumcount().astype("float64")
-    wins_before = grouped["is_win"].cumsum() - df["is_win"]
-    top3_before = grouped["is_top3"].cumsum() - df["is_top3"]
-    denom = starts.replace(0.0, np.nan)
-    return pd.DataFrame(
-        {
-            f"{prefix}_starts_before": starts,
-            f"{prefix}_win_rate_before": wins_before / denom,
-            f"{prefix}_top3_rate_before": top3_before / denom,
-        },
-        index=df.index,
+def _daily_actor_stats(df: pd.DataFrame, actor_col: str, prefix: str) -> pd.DataFrame:
+    """actor×日付で集計し、厳密に前日までの累積成績を返す。"""
+    keys = [actor_col, "race_date"]
+    daily = (
+        df.groupby(keys, observed=True, dropna=True)
+        .agg(_n=("is_win", "size"), _wins=("is_win", "sum"), _top3=("is_top3", "sum"))
+        .reset_index()
+        .sort_values(keys, kind="stable")
+        .reset_index(drop=True)
     )
+    grouped = daily.groupby(actor_col, observed=True, sort=False)
+    n_before = (grouped["_n"].cumsum() - daily["_n"]).astype("float64")
+    wins_before = grouped["_wins"].cumsum() - daily["_wins"]
+    top3_before = grouped["_top3"].cumsum() - daily["_top3"]
+    denom = n_before.replace(0.0, np.nan)
+    daily[f"{prefix}_starts_before"] = n_before
+    daily[f"{prefix}_win_rate_before"] = wins_before / denom
+    daily[f"{prefix}_top3_rate_before"] = top3_before / denom
+    feature_cols = [c for c in daily.columns if c.startswith(f"{prefix}_")]
+    return daily[keys + feature_cols]
 
 
 def add_actor_history(df: pd.DataFrame) -> pd.DataFrame:
-    """騎手・調教師の expanding 成績列を追加して返す。"""
-    jockey = _expanding_actor_stats(df, "jockey", "jockey")
-    trainer = _expanding_actor_stats(df, "trainer", "trainer")
-    return pd.concat([df, jockey, trainer], axis=1)
+    """騎手・調教師の expanding 成績列 (前日まで) を追加して返す。"""
+    out = df
+    for actor_col, prefix in (("jockey", "jockey"), ("trainer", "trainer")):
+        stats = _daily_actor_stats(out, actor_col, prefix)
+        out = out.merge(stats, on=[actor_col, "race_date"], how="left",
+                        validate="many_to_one")
+    return out
 
 
 def add_race_context(

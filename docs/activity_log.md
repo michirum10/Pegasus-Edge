@@ -6,16 +6,16 @@
 
 ## Current Snapshot
 
-- Updated: 2026-06-12 23:14 JST
-- Current focus: v3特徴量（86個）のwalk-forward判定が完了。**IG_valは全6フォールドで非負化（+0.0000〜+0.0021 nat）したが経済的にはゼロ、運用は全年0賭け**。「現存4資産に対し単勝市場は効率的」の結論はレシピA1-A4/B群を加えても不変。次の主攻は (1) レシピ群C＝複勝EV検証（payout cache監査通過済み）、(2) SPEC-1/SPEC-3 外部データ蓄積。
-- 確定事項: `_payout_cache.jsonl` スキーマ監査完了（8券種・14,054レース・2022-2026のみ・2024年に約1,100レース欠落、レシピ群C実装ゲート通過）。P0ゾーン単独戦略は失敗（非有界オッズゾーンのEVアーティファクトと診断）。pytest 31件は実環境で全通過。ブランチ `claude/confident-cerf-qumor0` は main へマージ済み（`55a1d3f`）。
-- Active processes: スクレイピング用Pythonプロセスが2本稼働中の可能性あり。`race_db` と `odds_final` は件数が増える可能性がある。
+- Updated: 2026-06-13 00:30 JST
+- Current focus: Codexレビュー指摘4件（High: actorリーク / Medium: ロガー発走跨ぎ・診断フラグ / Low: キャッシュ頑健性）の修正が完了し、**リーク修正後のv2/v3再判定でもIG≈0・全年0賭けの結論は不変**（最大フォールドのIGは約0.0004 nat低下＝リーク寄与分が消失、結論の信頼性が確定）。次の主攻は (1) レシピ群C＝複勝EV検証、(2) SPEC-1/SPEC-2クロール完了→拡張テーブル化、(3) SPEC-3時系列オッズ蓄積。
+- 確定事項: `_payout_cache.jsonl` スキーマ監査完了（8券種・14,054レース・2022-2026のみ・2024年に約1,100レース欠落、レシピ群C実装ゲート通過）。P0ゾーン単独戦略は失敗（非有界オッズゾーンのEVアーティファクトと診断）。pytest 36件（リーク回帰5件含む）全通過。
+- Active processes: SPEC-1（race_db）/ SPEC-2（odds_final）クロール2本 ＋ **本日2026-06-13開催分のオッズロガーデーモン**（00:16起動、初回T-60=08:45、3場36R）。
 - Latest confirmed root CSV range: `2015-01-04` から `2026-05-24`
-- Latest `scraper/data` snapshot:
-  - `race_db`: 8,224レース。2026完了、2025は1件不足、2024は残84件前後。
-  - `odds_final`: 9,609レース。2026完了、2024完了、2025は1件不足、2023は取得中。
-  - `odds_timeseries`: 2026-06-13分 36レース。`api_status=yoso` のため市場オッズではなく予想オッズ扱い。
-- Next expected action: スクレイピング完了後に `scraper/data/*.jsonl` を正規化し、既存CSVとは別の拡張テーブルとして取り込む。
+- Latest `scraper/data` snapshot (00:30 JST):
+  - `race_db`: 10,868レース（HTMLキャッシュ10,886）。新しい年から遡行中。
+  - `odds_final`: 12,655レース。新しい年から遡行中。
+  - `odds_timeseries`: 2026-06-13分はデーモン待機中（発売後は `api_status=result` の市場オッズが取れる見込み。昨日の36件は `yoso`=予想オッズ）。
+- Next expected action: スクレイピング完了後に `scraper/data/*.jsonl` を正規化し、既存CSVとは別の拡張テーブルとして取り込む。ロガーの毎朝自動起動（タスクスケジューラ）は未登録のため、開催日は手動起動が必要。
 
 ## Operating Rules
 
@@ -26,6 +26,28 @@
 - 詳細な数値や長い表は `results/` に置き、このログには要点と次アクションだけを書く。
 
 ## Log
+
+### 2026-06-13 00:30 JST
+
+- Actor: Claude
+- Category: Modeling / Backtest
+- Action: リーク修正後の v2（46特徴量）/ v3（86特徴量）walk-forward 再実行で IG を再判定。
+- Findings: v2 IG: −0.0003〜+0.0009、v3 IG: −0.0000〜+0.0017。全フォールド τ*=∞・0賭けは修正前後で不変。最大フォールド（2021）のIGはv2/v3とも約0.0004 nat低下し、リークの寄与分が消えたことを確認。**「現存4資産に対し単勝市場は実質効率的」の結論はリーク混入の疑いが消えた状態で確定**。
+- Files touched: `data/processed/value_lgbm_{bets,metrics}_walkforward_{v2,v3}.{csv,json}`（再生成）
+- Report: `results/20260613_codex_review_fixes.md`
+- Status: Done
+- Next: レシピ群C（複勝EV）の実装と、SPEC-1/SPEC-2完了後の拡張テーブル化。
+
+### 2026-06-13 00:16 JST
+
+- Actor: Claude
+- Category: Bug Fix / Scraping / Operations
+- Action: Codexレビュー指摘4件（2026-06-12 23:20 エントリ）を全て修正。(High) `add_actor_history` を日次集計→厳密に前日まで方式に書き換え（同一レース内・同日リークを遮断、列名維持）、回帰テスト5件追加。(Medium) SPEC-3ロガーに発走時刻 `deadline` 検査を3点（取得前・リトライ中・保存直前）導入し、跨いだスナップショットは `late` として破棄。(Medium) 診断フラグ `--no-early-stop` / `--no-ig-gate` をハーネスに復元。(Low) race_db_scraper の壊れたgzipキャッシュ自動再取得とパース例外の続行処理。あわせて本日開催分（3場36R）のロガーデーモンを起動し、修正後 v2/v3 の再実行を開始。
+- Verification: `py -m pytest tests/ -q` 36 passed（新規5件含む）、`py -m py_compile` 4ファイル合格、ロガー `--dry-run` 180イベント正常。
+- Files touched: `src/data/extra_features.py`, `tests/test_extra_features.py`, `scraper/odds_timeseries_logger.py`, `scraper/race_db_scraper.py`, `src/models/train_value_lgbm.py`
+- Report: `results/20260613_codex_review_fixes.md`
+- Status: Done
+- Next: 再実行のIG判定（00:30 エントリ参照）。
 
 ### 2026-06-12 23:20 JST
 

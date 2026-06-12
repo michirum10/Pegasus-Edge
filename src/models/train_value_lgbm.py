@@ -279,7 +279,8 @@ def _empty_bets(test: pd.DataFrame, test_year: int) -> pd.DataFrame:
 
 def run_fold(df: pd.DataFrame, feature_columns: list[str], test_year: int,
              *, phase_a_rounds: int, stopping: int, phase_b_rounds: int,
-             pure_ce: bool) -> dict:
+             pure_ce: bool, no_early_stop: bool = False,
+             no_ig_gate: bool = False) -> dict:
     test = df.loc[df["year"] == test_year]
     pre = df.loc[df["year"] < test_year]
     dates = pre["race_date"].sort_values().unique()
@@ -294,6 +295,8 @@ def run_fold(df: pd.DataFrame, feature_columns: list[str], test_year: int,
                            free_raw_data=False)
     val_ds = lgb.Dataset(val[feature_columns], label=val["is_win"],
                          reference=train_ds, free_raw_data=False)
+    callbacks = ([] if no_early_stop
+                 else [lgb.early_stopping(stopping_rounds=stopping, verbose=False)])
     booster = lgb.train(
         dict(LGB_PARAMS, objective=ce_obj),
         train_ds,
@@ -301,7 +304,7 @@ def run_fold(df: pd.DataFrame, feature_columns: list[str], test_year: int,
         valid_sets=[val_ds],
         valid_names=["val"],
         feval=make_val_ce_feval(val),
-        callbacks=[lgb.early_stopping(stopping_rounds=stopping, verbose=False)],
+        callbacks=callbacks,
     )
     best_it = booster.best_iteration or phase_a_rounds
 
@@ -309,8 +312,8 @@ def run_fold(df: pd.DataFrame, feature_columns: list[str], test_year: int,
     ce_market_val = float(-val.loc[val["is_win"] == 1, "logq"].mean())
     ig_val = ce_market_val - race_ce(val, p_val)
 
-    # --- IG ゲート ---
-    if ig_val <= 0.0:
+    # --- IG ゲート (--no-ig-gate で無効化、診断用) ---
+    if ig_val <= 0.0 and not no_ig_gate:
         phase = "A:no-bet"
         p_test = predict_probs(booster, test, feature_columns, num_iteration=best_it)
         tau_star, tau_table = float("inf"), tune_tau(val, p_val)[1]
@@ -388,6 +391,10 @@ def main() -> None:
                         help="テスト年を限定 (例: --years 2025)")
     parser.add_argument("--features", choices=("v2", "v3"), default="v2",
                         help="v3 = レシピA1-A4/B群を追加 (過去走ロールアップ等)")
+    parser.add_argument("--no-early-stop", action="store_true",
+                        help="診断用: Phase A の検証CE早期停止を無効化 (v1旧挙動の近似)")
+    parser.add_argument("--no-ig-gate", action="store_true",
+                        help="診断用: IGゲートを無効化し IG<=0 でも賭け評価に進む")
     args = parser.parse_args()
 
     if args.smoke:
@@ -405,7 +412,8 @@ def main() -> None:
     results = [
         run_fold(df, feature_columns, y, phase_a_rounds=phase_a_rounds,
                  stopping=stopping, phase_b_rounds=phase_b_rounds,
-                 pure_ce=args.pure_ce)
+                 pure_ce=args.pure_ce, no_early_stop=args.no_early_stop,
+                 no_ig_gate=args.no_ig_gate)
         for y in test_years
     ]
 

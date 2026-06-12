@@ -158,13 +158,26 @@ def load_done_labels(path: Path) -> set[str]:
     return labels
 
 
-def take_snapshot(kaisai_date: str, race: dict, label: str) -> bool:
-    """1レース1スナップショットを取得して JSONL に追記する。"""
+def take_snapshot(kaisai_date: str, race: dict, label: str,
+                  deadline: datetime | None = None) -> str:
+    """1レース1スナップショットを取得して JSONL に追記する。
+
+    deadline (=発走時刻) を渡された場合、取得開始前と保存直前の両方で
+    跨ぎを検査する。リトライ待ちやタイムアウトで発走を越えたデータは
+    「T-x分前のオッズ」ではないため保存しない (戻り値 "late")。
+    戻り値: "saved" | "failed" | "late"
+    """
     race_id = race["race_id"]
+    if deadline is not None and _now() >= deadline:
+        _log(f"  LATE {race_id} {label}: 発走時刻を跨いだため取得しない")
+        return "late"
     last_error: Exception | None = None
     for attempt, backoff in enumerate((0,) + RETRY_WAITS_SEC):
         if backoff:
             time.sleep(backoff)
+        if deadline is not None and _now() >= deadline:
+            _log(f"  LATE {race_id} {label}: リトライ中に発走時刻を跨いだ")
+            return "late"
         try:
             snap = fetch_odds_snapshot(race_id)
             break
@@ -173,7 +186,10 @@ def take_snapshot(kaisai_date: str, race: dict, label: str) -> bool:
             _log(f"  retry {attempt + 1} {race_id} {label}: {e}")
     else:
         _log(f"  FAILED {race_id} {label}: {last_error}")
-        return False
+        return "failed"
+    if deadline is not None and _now() >= deadline:
+        _log(f"  LATE {race_id} {label}: 取得中に発走時刻を跨いだため保存しない")
+        return "late"
 
     record = {
         "race_id": race_id,
@@ -193,7 +209,7 @@ def take_snapshot(kaisai_date: str, race: dict, label: str) -> bool:
     warn = "" if status == "result" else f" ※市場オッズではない (status={status})"
     _log(f"  saved {race_id} {label} status={status} "
          f"(単勝 {n_tan}/{len(record['tan'])}頭){warn}")
-    return True
+    return "saved"
 
 
 def build_schedule(kaisai_date: str, races: list[dict]) -> list[tuple[datetime, dict, str]]:
@@ -207,30 +223,28 @@ def build_schedule(kaisai_date: str, races: list[dict]) -> list[tuple[datetime, 
         hh, mm = map(int, race["post_time"].split(":"))
         post_dt = base.replace(hour=hh, minute=mm)
         for offset in SNAPSHOT_OFFSETS_MIN:
-            events.append((post_dt - timedelta(minutes=offset), race, f"T-{offset}"))
+            events.append((post_dt - timedelta(minutes=offset), post_dt, race, f"T-{offset}"))
     events.sort(key=lambda e: e[0])
     return events
 
 
 def run_daemon(kaisai_date: str, races: list[dict]) -> None:
     events = build_schedule(kaisai_date, races)
-    done_count = skip_count = fail_count = 0
+    counts = {"saved": 0, "failed": 0, "late": 0, "skipped": 0}
 
-    for due, race, label in events:
+    for due, post_dt, race, label in events:
         if label in load_done_labels(snapshot_path(kaisai_date, race["race_id"])):
             continue
         now = _now()
         if (now - due).total_seconds() > LATE_TOLERANCE_SEC:
-            skip_count += 1
+            counts["skipped"] += 1
             continue
         while (wait := (due - _now()).total_seconds()) > 0:
             time.sleep(min(wait, 30))
-        if take_snapshot(kaisai_date, race, label):
-            done_count += 1
-        else:
-            fail_count += 1
+        counts[take_snapshot(kaisai_date, race, label, deadline=post_dt)] += 1
 
-    _log(f"完了: 取得 {done_count} / 期限超過スキップ {skip_count} / 失敗 {fail_count}")
+    _log(f"完了: 取得 {counts['saved']} / 期限超過スキップ {counts['skipped']} "
+         f"/ 発走跨ぎ {counts['late']} / 失敗 {counts['failed']}")
 
 
 def main() -> int:
@@ -262,12 +276,12 @@ def main() -> int:
         runnable = [e for e in events
                     if (now - e[0]).total_seconds() <= LATE_TOLERANCE_SEC]
         _log(f"予定 {len(events)} 件 / 現時点で実行対象 {len(runnable)} 件")
-        for due, race, label in events[:3] + events[-3:]:
+        for due, _post_dt, race, label in events[:3] + events[-3:]:
             print(f"  {due.strftime('%m-%d %H:%M')}  {race['race_id']}  {label}")
         return 0
 
     if args.once:
-        ok = sum(take_snapshot(args.date, race, "manual") for race in races)
+        ok = sum(take_snapshot(args.date, race, "manual") == "saved" for race in races)
         _log(f"manual snapshot: {ok}/{len(races)} 成功")
         return 0 if ok == len(races) else 1
 

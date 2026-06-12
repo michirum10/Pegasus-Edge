@@ -48,10 +48,18 @@ _last_request_at = 0.0
 
 
 def fetch_html(race_id: str) -> str:
-    """HTMLを取得する。gzipキャッシュがあればネットワークを使わない。"""
+    """HTMLを取得する。gzipキャッシュがあればネットワークを使わない。
+
+    壊れたキャッシュ (gzip破損・空ファイル等) は削除してネットワークから
+    取り直す。キャッシュ1件の破損で年次ジョブを止めない。
+    """
     cache = HTML_CACHE_DIR / f"{race_id}.html.gz"
     if cache.exists():
-        return gzip.decompress(cache.read_bytes()).decode("EUC-JP", errors="replace")
+        try:
+            return gzip.decompress(cache.read_bytes()).decode("EUC-JP", errors="replace")
+        except (OSError, EOFError, gzip.BadGzipFile) as e:
+            print(f"  壊れたキャッシュを破棄して再取得: {race_id} ({e})", flush=True)
+            cache.unlink(missing_ok=True)
 
     global _last_request_at
     wait = MIN_REQUEST_INTERVAL_SEC - (time.monotonic() - _last_request_at)
@@ -175,6 +183,10 @@ def scrape_year(year: str, race_ids: list[str], limit: int | None) -> tuple[int,
                     break
                 except requests.RequestException as e:
                     print(f"  retry {race_id}: {e}", flush=True)
+                except Exception as e:
+                    # パース例外は決定的なのでリトライせず欠落として記録する
+                    print(f"  PARSE-ERROR {race_id}: {type(e).__name__}: {e}", flush=True)
+                    break
             if record is None or not record["horses"]:
                 n_fail += 1
                 print(f"  FAILED {race_id} (horses={0 if record is None else len(record['horses'])})",
