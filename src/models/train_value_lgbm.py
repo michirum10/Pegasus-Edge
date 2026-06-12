@@ -31,7 +31,9 @@ import pandas as pd
 from src.data.dataloader import (
     BASE_FEATURE_COLUMNS,
     HISTORY_FEATURE_COLUMNS,
+    assert_no_feature_leakage,
     load_dataset,
+    load_prepared_frame,
 )
 from src.data.extra_features import (
     ACTOR_FEATURE_COLUMNS,
@@ -39,6 +41,10 @@ from src.data.extra_features import (
     add_actor_history,
     add_race_context,
 )
+from src.features.brand import BRAND_FEATURE_COLUMNS, add_brand_overbet_features
+from src.features.market import MARKET_FEATURE_COLUMNS, add_market_microstructure_features
+from src.features.past_run import PAST_RUN_FEATURE_COLUMNS, add_past_run_features
+from src.features.trailing_stats import CALIBRATION_FEATURE_COLUMNS, add_odds_zone_calibration
 from src.models.value_objective import (
     ValueObjective,
     kelly_stakes,
@@ -80,11 +86,25 @@ LGB_PARAMS = {
 PHASE_A_MODEL_PATH = Path("data/processed/_phase_a_model.txt")
 
 
-def build_frame() -> tuple[pd.DataFrame, list[str]]:
-    """学習・検証に使う1枚のフレームを返す (レース単位で行が連続)。"""
-    ds = load_dataset(include_history=True)
-    df = pd.concat([ds.X, ds.y, ds.metadata[["race_id", "race_date", "horse_name"]]], axis=1)
-    df = df.loc[:, ~df.columns.duplicated()]
+def build_frame(feature_set: str = "v2") -> tuple[pd.DataFrame, list[str]]:
+    """学習・検証に使う1枚のフレームを返す (レース単位で行が連続)。
+
+    v2: 基本+馬履歴+騎手/調教師expanding+場・馬場 (45特徴量)
+    v3: v2 + レシピA1-A4/B群 = 市場ミクロ構造・FLBゾーン較正・過去走ロールアップ
+        (勝ち馬タイム差/スピード残差/上がり順位/通過/過剰反応指数)・ブランド過剰
+        人気指数。設計は results/20260612_roi_feature_recipes.md
+    """
+    if feature_set == "v3":
+        frame = load_prepared_frame(include_history=True)
+        df = frame.loc[
+            frame["finish_position"].notna()
+            & frame["win_odds"].notna()
+            & frame["popularity"].notna()
+        ].copy()
+    else:
+        ds = load_dataset(include_history=True)
+        df = pd.concat([ds.X, ds.y, ds.metadata[["race_id", "race_date", "horse_name"]]], axis=1)
+        df = df.loc[:, ~df.columns.duplicated()]
     df = df.sort_values(["race_date", "race_id", "horse_no"]).reset_index(drop=True)
 
     # 勝者がちょうど1頭のレースのみ残す (同着・勝者行欠落の除外)
@@ -95,6 +115,19 @@ def build_frame() -> tuple[pd.DataFrame, list[str]]:
 
     df = add_race_context(df)
     df = add_actor_history(df)
+
+    extra_columns: list[str] = []
+    if feature_set == "v3":
+        df = add_market_microstructure_features(df)
+        df = add_odds_zone_calibration(df)
+        df = add_past_run_features(df)
+        df = add_brand_overbet_features(df)
+        extra_columns = [
+            *MARKET_FEATURE_COLUMNS,
+            *CALIBRATION_FEATURE_COLUMNS,
+            *PAST_RUN_FEATURE_COLUMNS,
+            *BRAND_FEATURE_COLUMNS,
+        ]
 
     # 市場確率 q はフィルタ後の実出走行で再規格化する
     inv = 1.0 / df["win_odds"].to_numpy()
@@ -109,9 +142,11 @@ def build_frame() -> tuple[pd.DataFrame, list[str]]:
             *HISTORY_FEATURE_COLUMNS,
             *ACTOR_FEATURE_COLUMNS,
             *RACE_CONTEXT_COLUMNS,
+            *extra_columns,
         )
         if c in df.columns
     ]
+    assert_no_feature_leakage(df[feature_columns])
     for col in CATEGORICAL_COLUMNS:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -351,6 +386,8 @@ def main() -> None:
                         help="Phase B (価値項) を行わない診断モード")
     parser.add_argument("--years", type=int, nargs="*", default=None,
                         help="テスト年を限定 (例: --years 2025)")
+    parser.add_argument("--features", choices=("v2", "v3"), default="v2",
+                        help="v3 = レシピA1-A4/B群を追加 (過去走ロールアップ等)")
     args = parser.parse_args()
 
     if args.smoke:
@@ -362,8 +399,8 @@ def main() -> None:
     if args.years:
         test_years = args.years
 
-    df, feature_columns = build_frame()
-    print(f"frame: {df.shape}, features: {len(feature_columns)}")
+    df, feature_columns = build_frame(args.features)
+    print(f"frame: {df.shape}, features: {len(feature_columns)} ({args.features})")
 
     results = [
         run_fold(df, feature_columns, y, phase_a_rounds=phase_a_rounds,
@@ -389,7 +426,8 @@ def main() -> None:
     print(summary)
     print(f"\nプール: 賭数={len(all_bets)}, ROI={pooled_roi:.4f}, CI={pooled_ci}")
 
-    tag = "smoke" if args.smoke else ("pure_ce" if args.pure_ce else "walkforward_v2")
+    base_tag = "smoke" if args.smoke else ("pure_ce" if args.pure_ce else "walkforward")
+    tag = f"{base_tag}_{args.features}"
     out_dir = Path("data/processed")
     out_dir.mkdir(parents=True, exist_ok=True)
     all_bets.to_csv(out_dir / f"value_lgbm_bets_{tag}.csv", index=False)
