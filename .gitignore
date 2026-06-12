@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Raw and local data files
+race_results.csv
+race_meta.csv
+processed_races.csv
+_payout_cache.jsonl
+data/raw/
+data/processed/
+data/interim/
+
+# Large generated artifacts
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.joblib
+*.sqlite
+*.db
+
+# Keep Markdown experiment reports tracked
+!results/
+!results/*.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
