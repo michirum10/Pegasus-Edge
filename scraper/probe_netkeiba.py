@@ -77,7 +77,55 @@ def probe_odds_api(race_id: str, label: str) -> None:
             print("  (JSONではない)")
 
 
+def probe_coverage(per_year: int = 3) -> None:
+    """SPEC-2: オッズAPIの過去カバレッジを年別サンプルで確定する。
+
+    race_meta.csv から各年先頭 per_year レースを取り、API の status と
+    単勝・複勝の頭数を記録する。複勝レンジが過去年まで取れるなら
+    設計書の判定C（複勝EV検証不可）を覆せる。
+    """
+    import csv
+    from collections import OrderedDict
+
+    by_year: OrderedDict[str, list[str]] = OrderedDict()
+    with open("race_meta.csv", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            year = row["race_id"][:4]
+            if len(by_year.setdefault(year, [])) < per_year:
+                by_year[year].append(row["race_id"])
+
+    print("\n=== [SPEC-2] オッズAPI 年別カバレッジプローブ ===")
+    print("year  race_id        status   n_tan  n_fuku  official_datetime")
+    rows = []
+    for year, race_ids in by_year.items():
+        for race_id in race_ids:
+            url = (f"https://race.netkeiba.com/api/api_get_jra_odds.html"
+                   f"?race_id={race_id}&type=1&action=init")
+            try:
+                time.sleep(SLEEP_SEC)
+                payload = requests.get(url, headers=HEADERS, timeout=20).json()
+            except (requests.RequestException, ValueError) as e:
+                print(f"{year}  {race_id}  ERROR: {e}")
+                rows.append((year, race_id, "ERROR", 0, 0, ""))
+                continue
+            data = payload.get("data") or {}
+            odds = data.get("odds") or {}
+            n_tan = len(odds.get("1") or {})
+            n_fuku = len(odds.get("2") or {})
+            status = payload.get("status")
+            official = data.get("official_datetime", "")
+            print(f"{year}  {race_id}  {status:8}  {n_tan:4}  {n_fuku:5}  {official}")
+            rows.append((year, race_id, status, n_tan, n_fuku, official))
+
+    ok_years = sorted({y for y, *_rest in [(r[0], r) for r in rows]
+                       if any(r2[0] == y and r2[2] == "result" and r2[4] > 0 for r2 in rows)})
+    print(f"\n複勝レンジが result で取れた年: {ok_years}")
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--coverage":
+        probe_coverage(int(sys.argv[2]) if len(sys.argv) > 2 else 3)
+        return
     kaisai_date = sys.argv[1] if len(sys.argv) > 1 else "20260613"
     probe_race_list(kaisai_date)
     # 過去レース (払戻キャッシュに存在することが確認済みのID) で形式確認
