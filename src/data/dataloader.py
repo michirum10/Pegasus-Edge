@@ -90,6 +90,14 @@ PROHIBITED_FEATURE_COLUMNS: frozenset[str] = frozenset(
         "race_time_seconds",
         "last3f",
         "prize_money",
+        # src/features/past_run.py の中間post-race列 (shift(1)版のみ特徴量可)
+        "time_behind_winner",
+        "speed_resid",
+        "last3f_rank_pct",
+        "early_pos_pct",
+        "late_pos_pct",
+        "ground_gained",
+        "race_strength",
     )
 )
 
