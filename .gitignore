@@ -23,6 +23,7 @@ race_results.csv
 race_meta.csv
 processed_races.csv
 _payout_cache.jsonl
+scraper/data/
 data/raw/
 data/processed/
 data/interim/
