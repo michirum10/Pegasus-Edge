@@ -6,8 +6,8 @@
 
 ## Current Snapshot
 
-- Updated: 2026-06-13 00:51 JST
-- Current focus: **複勝プール監査で初の経済的に意味のある歪みを発見**: 単勝[1.0,2.0)帯の複勝ROI 0.8963（CI [0.881,0.911]・年別安定・tension +0.104）。損益分岐への条件付きリフト要求は約+11.6%でwin poolの半分以下。次の主攻は (1) C4実装＝P(top3)モデル×実払戻EVの[1,3)帯walk-forward、(2) SPEC-1/SPEC-2クロール完了→拡張テーブル化（root CSVの2024年欠落約1,100レースもrace_dbから補完）、(3) SPEC-3時系列オッズ蓄積。
+- Updated: 2026-06-13 01:30 JST
+- Current focus: **C4改訂版完了**。SPEC-2 `O_fuku_min` × P̂(top3) に切り替えると [1.0,1.4) のIGは全4フォールドで大きく正（+0.0113〜+0.0196）だが、検証EV>1候補は最大12件で `MIN_VAL_BETS=30` を満たさず、全フォールド `τ*=∞`・0賭け。[1.0,2.0) でも同様に0賭け。次の主攻は (1) SPEC-1 `race_db` 払戻の正規化で2015-2021を含む12年複勝歪み検証、(2) SPEC-1/SPEC-2クロール完了→拡張テーブル化、(3) SPEC-3時系列オッズ蓄積後の購入時点 `O_fuku_min` 検証。
 - 確定事項: `_payout_cache.jsonl` スキーマ監査完了（8券種・14,054レース・2022-2026のみ・2024年に約1,100レース欠落、レシピ群C実装ゲート通過）。P0ゾーン単独戦略は失敗（非有界オッズゾーンのEVアーティファクトと診断）。pytest 36件（リーク回帰5件含む）全通過。
 - Active processes: SPEC-1（race_db）/ SPEC-2（odds_final）クロール2本 ＋ **本日2026-06-13開催分のオッズロガーデーモン**（00:16起動、初回T-60=08:45、3場36R）。
 - Latest confirmed root CSV range: `2015-01-04` から `2026-05-24`
@@ -26,6 +26,37 @@
 - 詳細な数値や長い表は `results/` に置き、このログには要点と次アクションだけを書く。
 
 ## Log
+
+### 2026-06-13 01:30 JST
+
+- Actor: Codex
+- Category: Modeling / Backtest
+- Action: C4改訂版を実装。`src/models/train_place_lgbm.py` に SPEC-2 `odds_final` の複勝レンジ下限 `fuku_min_odds` を結合し、EV判定を `P̂(place) × fuku_min_odds > 1+τ` に変更。デフォルトゾーンを `[1.0,1.4)` にし、比較で `[1.0,2.0)` も本走。
+- Findings: `[1.0,1.4)` はIGが全4フォールドで正（2023 +0.01964、2024 +0.01509、2025 +0.01127、2026 +0.01388）だが、検証EV>1候補が1/5/9/12件で `MIN_VAL_BETS=30` 未満のため全て `τ*=∞`・0賭け。`[1.0,2.0)` もIG正だが0賭け。歪みは存在するが、現行v3特徴量と最終複勝下限だけでは再現可能な購入ルールに未到達。
+- Verification: `py -m py_compile src/models/train_place_lgbm.py` 合格、`py -m src.models.train_place_lgbm --smoke --features v3` 完走、`py -m src.models.train_place_lgbm --features v3` 完走、`py -m src.models.train_place_lgbm --features v3 --zone-hi 2.0` 完走、`py -m pytest tests -q` は36 passed。
+- Report: `results/20260613_c4_fukumin_walkforward.md`
+- Status: Done
+- Next: SPEC-1 `race_db` 払戻を正規化し、2015-2021を含む12年複勝歪み検証へ進む。
+
+### 2026-06-13 01:16 JST
+
+- Actor: Codex
+- Category: Modeling / Operations
+- Action: C4 walk-forward本走の成果物 `data/processed/place_lgbm_metrics_walkforward_v3.json` と `place_walkforward_log.txt` を確認し、完了後の次アクションを整理。
+- Findings: 2023-2026全フォールドで IG_val(zone) は正（2023 +0.00400、2024 +0.00230、2025 +0.00179、2026 +0.00180）だが、検証期間のEV選択は全て `τ*=∞`、賭数0。zone全買いROIは0.8632→0.9128で改善傾向だが、履歴平均払戻EVでは個別購入点を作れない。
+- Status: Done
+- Next: SPEC-2完了を待って複勝レンジ下限 `O_fuku_min` を正規化し、C4を `O_fuku_min × P̂(top3)` 主軸に改訂する。並行して race_db払戻を取り込み、2015-2021を含む12年複勝歪み検証を行う。
+
+### 2026-06-13 01:02 JST
+
+- Actor: Claude
+- Category: Code Review / Verification
+- Action: 複勝プール監査（00:51 エントリ）をレビュー。コード精読＋監査コードを経由しない独立再計算（cache+race_results直読）で反証を試行。
+- Findings: **承認**。[1.0,2.0)帯の全数値を再現（ROI 0.8941 vs 報告0.8963、差は行フィルタ僅差。年別・平均払戻は一致）。追加発見: 帯内部はオッズ単調勾配で、[1.0,1.2) ROI 0.9875 / [1.2,1.4) 0.9735 → **合算[1.0,1.4)の必要リフトは約+2.4%**（帯平均+11.6%の1/5）。ただし100円元返しフロアにより、C4は履歴EVマップでなく **O_fuku_min（SPEC-2複勝レンジ下限）× P̂(top3)** を主軸にすべき。複勝は1賭け分散が単勝の約1/100で検出力に優れる。Hausch–Ziemba (Dr. Z) と同型構造。留意: [1.0,1.4)は約85賭け/年で容量分析が将来必要、2026年トレンド主張は部分年につき時期尚早、race_db払戻で2015-2021への拡張検証を**C4実装前に**行うべき。
+- Files touched: `results/20260613_place_pool_audit.md`（レビュー所見を追記）
+- Report: `results/20260613_place_pool_audit.md`
+- Status: Done
+- Next: (1) race_db クロール完了後に複勝監査を2015-2021へ拡張（12年安定性の確定）。(2) C4は SPEC-2 バックフィル完了を待って O_fuku_min ベースで実装。
 
 ### 2026-06-13 00:51 JST
 

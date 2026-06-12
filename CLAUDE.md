@@ -236,3 +236,34 @@ Claude が迷った場合の優先順位は以下とする。
 7. 実装速度
 
 リーク防止と再現性を犠牲にして、短期的なROIや精度を上げてはならない。
+
+---
+
+## 10. 共有活動ログ運用
+
+検証レポートとは別に、プロジェクト全体の作業履歴と現在地を `docs/activity_log.md` に記録する。
+
+運用ルール:
+
+- Codex と Claude で別ファイルに分けず、`docs/activity_log.md` の1ファイルに統一する。
+- 各エントリには必ず `Actor` を書き、`Codex`, `Claude`, `User`, `Codex+Claude` などで担当を明示する。
+- データ監査、実装、スクレイピング、モデル実験、バックテスト、運用判断、重要な調査を行ったら追記する。
+- 詳細な検証結果は従来通り `results/YYYYMMDD_*.md` に保存し、活動ログから `Report` として参照する。
+- 活動ログには、目的、何をしたか、主要な発見、触ったファイル、状態、次アクションを短く残す。
+- 既存レポートや過去ログから抜け漏れを見つけた場合は、各Agentが自分の担当分を遡って追記する。
+- 作業の現在地が変わった場合は、`docs/activity_log.md` の `Current Snapshot` を更新し、あわせて `Log` にエントリを追加する。
+
+推奨エントリ形式:
+
+```markdown
+### YYYY-MM-DD HH:mm JST
+
+- Actor: Claude
+- Category: Mathematical Design / Modeling / Scraping / Analysis / Operations
+- Action: 何をしたか
+- Findings: 主要な発見
+- Files touched: `path/to/file.py`, `path/to/report.md`
+- Report: `results/YYYYMMDD_name.md`
+- Status: Done / In progress / Blocked
+- Next: 次に見ること
+```
