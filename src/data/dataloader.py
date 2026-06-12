@@ -111,6 +111,7 @@ BASE_FEATURE_COLUMNS: tuple[str, ...] = (
     "trainer",
     "owner",
     "field_size",
+    "field_size_running",
     "implied_win_prob",
     "market_prob",
     "popularity_pct",
@@ -205,6 +206,26 @@ def load_dataset(
     return RaceDataset(X=X, y=y, metadata=metadata)
 
 
+def load_prepared_frame(
+    results_path: str | Path = "race_results.csv",
+    meta_path: str | Path = "race_meta.csv",
+    *,
+    merge_how: str = "left",
+    include_history: bool = True,
+) -> pd.DataFrame:
+    """Return the full normalized frame including outcome columns.
+
+    Downstream feature builders and backtests need outcomes (``is_win``,
+    ``win_profit_per_100yen``) next to pre-race columns to build trailing
+    statistics.  Never feed this frame to a model directly; select feature
+    columns and run :func:`assert_no_feature_leakage` on the selection.
+    """
+
+    results, meta = load_raw_csvs(results_path, meta_path)
+    merged = merge_results_with_meta(results, meta, how=merge_how)
+    return prepare_model_frame(merged, include_history=include_history)
+
+
 def load_raw_csvs(
     results_path: str | Path = "race_results.csv",
     meta_path: str | Path = "race_meta.csv",
@@ -290,10 +311,15 @@ def prepare_model_frame(merged: pd.DataFrame, *, include_history: bool = True) -
     frame["win_odds"] = pd.to_numeric(frame["単勝"], errors="coerce")
     frame["popularity"] = pd.to_numeric(frame["人気"], errors="coerce")
     frame["field_size"] = frame.groupby(RACE_ID)[RACE_ID].transform("size").astype("int16")
+    # 取消・除外馬は単勝がNaNのまま行として残るため、実際に出走した頭数を別に持つ。
+    # 人気は出走馬の中での順位なので、比率の分母は running 頭数に揃える。
+    frame["field_size_running"] = (
+        frame["win_odds"].notna().groupby(frame[RACE_ID]).transform("sum").astype("int16")
+    )
     frame["implied_win_prob"] = 1.0 / frame["win_odds"]
     race_prob_sum = frame.groupby(RACE_ID)["implied_win_prob"].transform("sum")
     frame["market_prob"] = frame["implied_win_prob"] / race_prob_sum
-    frame["popularity_pct"] = frame["popularity"] / frame["field_size"]
+    frame["popularity_pct"] = frame["popularity"] / frame["field_size_running"]
     frame["log_win_odds"] = np.log(frame["win_odds"])
 
     frame["win_payout_per_100yen"] = np.where(
